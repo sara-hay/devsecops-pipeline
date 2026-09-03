@@ -80,7 +80,7 @@ docker-compose.override.yml
 
 # ============================
 # Security scan outputs
-# (Semgrep, Trivy, and general SAST/SCA JSON/SARIF results)
+# (Semgrep, Trivy, and general SAST/SCA JSON/SARIF results)git p
 # ============================
 semgrep-results.json
 semgrep-output.json
