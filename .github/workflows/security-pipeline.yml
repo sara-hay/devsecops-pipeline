@@ -99,3 +99,33 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 5
+
+  # ---------------------------------------------------------
+  # 4. Policy-as-code gate: parse Semgrep + Trivy results and
+  #    fail the build if any Critical-severity finding exists
+  # ---------------------------------------------------------
+  security-gate:
+    name: Security Gate
+    runs-on: ubuntu-latest
+    needs: [semgrep-sast, trivy-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Semgrep results
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep-results
+
+      - name: Download Trivy results
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-results
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run security gate
+        run: python security_gate.py --semgrep semgrep-results.json --trivy trivy-results.json
