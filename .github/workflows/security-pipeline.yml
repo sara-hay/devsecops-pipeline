@@ -85,7 +85,7 @@ jobs:
         run: docker load -i image.tar
 
       - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: json
@@ -99,3 +99,45 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 5
+
+  # ---------------------------------------------------------
+  # 4. Policy-as-code gate: parse Semgrep + Trivy results and
+  #    fail the build if any Critical-severity finding exists
+  # ---------------------------------------------------------
+  security-gate:
+    name: Security Gate
+    runs-on: ubuntu-latest
+    needs: [semgrep-sast, trivy-scan]
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Semgrep results
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep-results
+
+      - name: Download Trivy results
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-results
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install boto3
+        run: pip install boto3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::753036488457:role/GitHubActions-DynamoDB-Write
+          aws-region: us-east-1
+
+      - name: Run security gate
+        run: python security_gate.py --semgrep semgrep-results.json --trivy trivy-results.json
