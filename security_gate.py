@@ -3,7 +3,9 @@ build if any Critical-severity finding is present.
 """
 import argparse
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
@@ -51,10 +53,36 @@ def count_trivy(path, counts):
                 counts[severity] += 1
 
 
+def put_scan_metrics(table_name, region, repository, commit_hash, counts):
+    import boto3
+
+    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
+    table.put_item(
+        Item={
+            "CommitHash": commit_hash,
+            "RepositoryName": repository,
+            "Timestamp": datetime.now(timezone.utc).isoformat(),
+            "CriticalCount": counts["CRITICAL"],
+            "HighCount": counts["HIGH"],
+            "MediumCount": counts["MEDIUM"],
+            "LowCount": counts["LOW"],
+        }
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--semgrep", default="semgrep-results.json")
     parser.add_argument("--trivy", default="trivy-results.json")
+    parser.add_argument("--dynamodb-table", default="SecOps-Scan-Metrics")
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
+    parser.add_argument("--commit-hash", default=os.environ.get("GITHUB_SHA"))
+    parser.add_argument(
+        "--skip-dynamodb",
+        action="store_true",
+        help="Skip pushing scan metrics to DynamoDB (for local runs without AWS access)",
+    )
     args = parser.parse_args()
 
     counts = {severity: 0 for severity in SEVERITIES}
@@ -64,6 +92,21 @@ def main():
     print("Security scan summary:")
     for severity in SEVERITIES:
         print(f"  {severity:<8} {counts[severity]}")
+
+    if args.skip_dynamodb:
+        print("\n[security_gate] Skipping DynamoDB metrics push (--skip-dynamodb).")
+    elif not args.repository or not args.commit_hash:
+        print(
+            "\n[security_gate] WARNING: --repository/--commit-hash not set "
+            "(GITHUB_REPOSITORY/GITHUB_SHA missing) — skipping DynamoDB metrics push.",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            put_scan_metrics(args.dynamodb_table, args.region, args.repository, args.commit_hash, counts)
+            print(f"\n[security_gate] Pushed scan metrics to DynamoDB table '{args.dynamodb_table}'.")
+        except Exception as e:
+            print(f"\n[security_gate] WARNING: failed to push scan metrics to DynamoDB: {e}", file=sys.stderr)
 
     if counts["CRITICAL"] > 0:
         print(f"\n[security_gate] FAIL: {counts['CRITICAL']} Critical finding(s) found.")
