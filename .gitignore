@@ -64,6 +64,7 @@ coverage.xml
 *.swp
 *.swo
 *~
+CLAUDE.md
 
 # ============================
 # OS files
