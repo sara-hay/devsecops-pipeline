@@ -140,4 +140,4 @@ jobs:
           aws-region: us-east-1
 
       - name: Run security gate
-        run: python security_gate.py --semgrep semgrep-results.json --trivy trivy-results.json
+        run: python security_gate.py --semgrep semgrep-results.json --trivy trivy-results.json --region us-east-1

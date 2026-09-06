@@ -54,20 +54,48 @@ def count_trivy(path, counts):
 
 
 def put_scan_metrics(table_name, region, repository, commit_hash, counts):
+    """Write one scan record to DynamoDB. Returns True on success, False on
+    any AWS/boto3 failure (logged to stdout rather than raised) so a metrics
+    outage never masks or blocks the actual Critical-vulnerability gate.
+    """
     import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
 
-    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
-    table.put_item(
-        Item={
-            "CommitHash": commit_hash,
-            "RepositoryName": repository,
-            "Timestamp": datetime.now(timezone.utc).isoformat(),
-            "CriticalCount": counts["CRITICAL"],
-            "HighCount": counts["HIGH"],
-            "MediumCount": counts["MEDIUM"],
-            "LowCount": counts["LOW"],
-        }
-    )
+    try:
+        table = boto3.resource("dynamodb", region_name=region).Table(table_name)
+        table.put_item(
+            Item={
+                "CommitHash": commit_hash,
+                "RepositoryName": repository,
+                "Timestamp": datetime.now(timezone.utc).isoformat(),
+                "CriticalCount": counts["CRITICAL"],
+                "HighCount": counts["HIGH"],
+                "MediumCount": counts["MEDIUM"],
+                "LowCount": counts["LOW"],
+            }
+        )
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "Unknown")
+        message = e.response.get("Error", {}).get("Message", str(e))
+        print(
+            f"[security_gate] ERROR: DynamoDB put_item failed "
+            f"(table={table_name!r}, region={region!r}): {code}: {message}"
+        )
+        return False
+    except BotoCoreError as e:
+        print(
+            f"[security_gate] ERROR: boto3 client error writing to DynamoDB "
+            f"(table={table_name!r}, region={region!r}): {e}"
+        )
+        return False
+    except Exception as e:
+        print(
+            f"[security_gate] ERROR: unexpected failure writing to DynamoDB "
+            f"(table={table_name!r}, region={region!r}): {type(e).__name__}: {e}"
+        )
+        return False
+
+    return True
 
 
 def main():
@@ -93,20 +121,19 @@ def main():
     for severity in SEVERITIES:
         print(f"  {severity:<8} {counts[severity]}")
 
+    # DynamoDB metrics push MUST happen before any policy-gate sys.exit() below,
+    # so the trend record is written regardless of pass/fail outcome.
     if args.skip_dynamodb:
         print("\n[security_gate] Skipping DynamoDB metrics push (--skip-dynamodb).")
     elif not args.repository or not args.commit_hash:
         print(
-            "\n[security_gate] WARNING: --repository/--commit-hash not set "
-            "(GITHUB_REPOSITORY/GITHUB_SHA missing) — skipping DynamoDB metrics push.",
-            file=sys.stderr,
+            "\n[security_gate] ERROR: --repository/--commit-hash not set "
+            "(GITHUB_REPOSITORY/GITHUB_SHA missing) — skipping DynamoDB metrics push."
         )
     else:
-        try:
-            put_scan_metrics(args.dynamodb_table, args.region, args.repository, args.commit_hash, counts)
-            print(f"\n[security_gate] Pushed scan metrics to DynamoDB table '{args.dynamodb_table}'.")
-        except Exception as e:
-            print(f"\n[security_gate] WARNING: failed to push scan metrics to DynamoDB: {e}", file=sys.stderr)
+        print(f"\n[security_gate] Pushing scan metrics to DynamoDB table '{args.dynamodb_table}' (region={args.region})...")
+        if put_scan_metrics(args.dynamodb_table, args.region, args.repository, args.commit_hash, counts):
+            print(f"[security_gate] Successfully pushed scan metrics for commit {args.commit_hash}.")
 
     if counts["CRITICAL"] > 0:
         print(f"\n[security_gate] FAIL: {counts['CRITICAL']} Critical finding(s) found.")
