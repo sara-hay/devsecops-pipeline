@@ -106,3 +106,18 @@ security-reports/
 .env.*.local
 *.pem
 *.key
+
+# ============================
+# Terraform
+# (commit .terraform.lock.hcl; never commit state or variable files)
+# ============================
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
