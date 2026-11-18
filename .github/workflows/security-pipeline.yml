@@ -87,6 +87,7 @@ jobs:
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0 # pin Trivy binary; older releases' assets were removed upstream
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: json
           output: trivy-results.json
@@ -99,3 +100,59 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 5
+
+  # ---------------------------------------------------------
+  # 4. Policy-as-code gate: parse Semgrep + Trivy results and
+  #    fail the build if any Critical-severity finding exists
+  # ---------------------------------------------------------
+  security-gate:
+    name: Security Gate
+    runs-on: ubuntu-latest
+    needs: [semgrep-sast, trivy-scan]
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Semgrep results
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep-results
+
+      - name: Download Trivy results
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-results
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install boto3
+        run: pip install boto3
+
+
+      - name: Debug OIDC claims
+        run: |
+          python3 - <<'EOF'
+          import os, json, base64, urllib.request
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=sts.amazonaws.com"
+          req = urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]})
+          tok = json.load(urllib.request.urlopen(req))["value"]
+          payload = tok.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          print({k: claims.get(k) for k in ("iss", "aud", "sub", "repository", "event_name", "ref")})
+          EOF
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::753036488457:role/GitHubActions-DynamoDB-Write
+          aws-region: us-east-1
+
+      - name: Run security gate
+        run: python security_gate.py --semgrep semgrep-results.json --trivy trivy-results.json --region us-east-1
