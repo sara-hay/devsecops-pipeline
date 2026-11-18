@@ -115,6 +115,8 @@ security-reports/
 *.tfstate
 *.tfstate.*
 crash.log
+tfplan
+*.tfplan
 *.tfvars
 *.tfvars.json
 override.tf
